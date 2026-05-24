@@ -42,6 +42,24 @@ directory into its own repo without changes.
 
 ## Run locally
 
+### Windows one-click
+
+Double-click **`start.bat`** in the repo root. It will:
+
+1. Start PostgreSQL via Docker
+2. Create `backend\.env` and `frontend\.env.local` from the examples
+   (generating a random `SESSION_SECRET`)
+3. `npm/pnpm install` for each app on first run
+4. Apply the Drizzle schema and seed the catalog from ByMykel/CSGO-API
+5. Launch the backend and frontend dev servers in two new terminal windows
+6. Open <http://localhost:3000> in your browser
+
+Use **`stop.bat`** to shut PostgreSQL back down. Steam login won't work until
+you put a real `STEAM_API_KEY` in `backend\.env` (the rest of the app is fully
+browsable without it).
+
+### Manual
+
 ```bash
 # 1. Postgres
 docker compose up -d db

@@ -1,0 +1,193 @@
+@echo off
+setlocal enabledelayedexpansion
+chcp 65001 >nul
+
+rem ============================================================
+rem  birskins  -  one-click local launcher
+rem ------------------------------------------------------------
+rem  What it does:
+rem    1. Checks prerequisites (docker, node, npm/pnpm)
+rem    2. Starts PostgreSQL via docker compose
+rem    3. Creates backend/.env and frontend/.env.local if missing
+rem    4. Installs dependencies (first run only)
+rem    5. Applies DB migrations and seeds the CS2 skin catalog
+rem       from ByMykel/CSGO-API (first run only)
+rem    6. Launches backend  (http://localhost:4000) in a new window
+rem    7. Launches frontend (http://localhost:3000) in a new window
+rem    8. Opens the storefront in your default browser
+rem ============================================================
+
+cd /d "%~dp0"
+
+echo.
+echo ============================================================
+echo   birskins local launcher
+echo ============================================================
+echo.
+
+rem -- Pick package manager: prefer pnpm, fall back to npm --
+set "PM="
+where pnpm >nul 2>nul && set "PM=pnpm"
+if not defined PM (
+    where npm >nul 2>nul && set "PM=npm"
+)
+if not defined PM (
+    echo [ERROR] Neither pnpm nor npm was found in PATH.
+    echo         Install Node.js 18+ from https://nodejs.org/ and re-run.
+    pause
+    exit /b 1
+)
+echo [info] Using package manager: %PM%
+
+rem -- Check docker --
+where docker >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] Docker is not in PATH. Install Docker Desktop from
+    echo         https://www.docker.com/products/docker-desktop/ and re-run.
+    pause
+    exit /b 1
+)
+
+rem -- Check node --
+where node >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] Node.js is not in PATH. Install Node.js 18+ from
+    echo         https://nodejs.org/ and re-run.
+    pause
+    exit /b 1
+)
+
+echo.
+echo [1/7] Starting PostgreSQL...
+docker compose up -d db
+if errorlevel 1 (
+    echo [ERROR] Failed to start PostgreSQL via docker compose.
+    pause
+    exit /b 1
+)
+
+echo.
+echo [2/7] Preparing backend\.env ...
+if not exist "backend\.env" (
+    copy /y "backend\.env.example" "backend\.env" >nul
+    rem Generate a random session secret so the backend boots without manual edits
+    for /f %%S in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')"') do set "SESSION_SECRET=%%S"
+    powershell -NoProfile -Command "(Get-Content backend\.env) -replace 'change-me-to-a-long-random-string-at-least-32-chars', '%SESSION_SECRET%' | Set-Content backend\.env"
+    echo [info] Created backend\.env with a generated SESSION_SECRET.
+    echo [WARN] STEAM_API_KEY is still a placeholder. Steam login will not work
+    echo        until you set it in backend\.env (https://steamcommunity.com/dev/apikey).
+) else (
+    echo [info] backend\.env already exists, leaving it alone.
+)
+
+echo.
+echo [3/7] Preparing frontend\.env.local ...
+if not exist "frontend\.env.local" (
+    copy /y "frontend\.env.example" "frontend\.env.local" >nul
+    echo [info] Created frontend\.env.local.
+) else (
+    echo [info] frontend\.env.local already exists, leaving it alone.
+)
+
+echo.
+echo [4/7] Installing backend dependencies (first run only)...
+pushd backend
+if not exist "node_modules" (
+    call %PM% install
+    if errorlevel 1 (
+        echo [ERROR] Backend install failed.
+        popd
+        pause
+        exit /b 1
+    )
+) else (
+    echo [info] backend\node_modules exists, skipping install.
+)
+popd
+
+echo.
+echo [5/7] Installing frontend dependencies (first run only)...
+pushd frontend
+if not exist "node_modules" (
+    call %PM% install
+    if errorlevel 1 (
+        echo [ERROR] Frontend install failed.
+        popd
+        pause
+        exit /b 1
+    )
+) else (
+    echo [info] frontend\node_modules exists, skipping install.
+)
+popd
+
+echo.
+echo [info] Waiting for PostgreSQL to accept connections...
+set /a TRIES=0
+:waitdb
+docker compose exec -T db pg_isready -U birskins >nul 2>nul
+if not errorlevel 1 goto dbready
+set /a TRIES+=1
+if %TRIES% GEQ 30 (
+    echo [ERROR] PostgreSQL did not become ready in time.
+    pause
+    exit /b 1
+)
+timeout /t 1 /nobreak >nul
+goto waitdb
+:dbready
+echo [info] PostgreSQL is ready.
+
+echo.
+echo [6/7] Applying database schema and seeding CS2 skins...
+pushd backend
+if not exist ".seeded" (
+    call %PM% run db:generate
+    if errorlevel 1 (
+        echo [WARN] db:generate failed (continuing - schema may already be generated).
+    )
+    call %PM% run db:push
+    if errorlevel 1 (
+        echo [ERROR] Database push failed. Is DATABASE_URL correct?
+        popd
+        pause
+        exit /b 1
+    )
+    call %PM% run seed
+    if errorlevel 1 (
+        echo [ERROR] Seeding ByMykel skin catalog failed.
+        popd
+        pause
+        exit /b 1
+    )
+    echo done > .seeded
+    echo [info] Database initialised and seeded.
+) else (
+    echo [info] .seeded marker found, skipping migrate/seed. Delete backend\.seeded to re-run.
+)
+popd
+
+echo.
+echo [7/7] Launching backend and frontend in new windows...
+start "birskins-backend"  cmd /k "cd /d %~dp0backend && %PM% run dev"
+start "birskins-frontend" cmd /k "cd /d %~dp0frontend && %PM% run dev"
+
+echo.
+echo [info] Waiting a few seconds for the dev servers to boot...
+timeout /t 6 /nobreak >nul
+
+echo [info] Opening http://localhost:3000 in your browser ...
+start "" "http://localhost:3000"
+
+echo.
+echo ============================================================
+echo   birskins is running.
+echo     frontend : http://localhost:3000
+echo     backend  : http://localhost:4000   (health: /health)
+echo.
+echo   Close the two new terminal windows to stop the dev servers.
+echo   To stop PostgreSQL:   docker compose down
+echo ============================================================
+echo.
+pause
+endlocal
