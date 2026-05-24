@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: birskins-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: birskins
+      POSTGRES_PASSWORD: birskins
+      POSTGRES_DB: birskins
+    ports:
+      - "5432:5432"
+    volumes:
+      - birskins-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U birskins"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  birskins-db:
